@@ -11,7 +11,7 @@ Blueland is a modular Python backend that manages Bluetooth device connections, 
 - Modular backend API for CLI wrappers or graphical frontends
 
 ## What it cannot do:
-- A full-fledged UI like [blueman](https://github.com/blueman-project/blueman) or [overskride](https://github.com/kaii-lb/overskride) (you might want to check out blueland-frontend instead)
+- A full-fledged UI like [blueman](https://github.com/blueman-project/blueman) or [overskride](https://github.com/kaii-lb/overskride) (you might want to check out [blueland-frontend](https://github.com/nelideven/blueland-frontend) instead)
 - Manage multiple adapters (currently hardcoded to /org/bluez/hci0)
 - Automatically handle low-level audio routing (e.g. Default sink/source switching)
 - Persist device state across reboots (i.e. cache is session-based)
