@@ -105,7 +105,11 @@ class BluelandFrontend(ServiceInterface):
             device_info = interfaces['org.bluez.Device1']
             mac = device_info.get('Address', Variant('s', 'Unknown')).value
             name = device_info.get('Name', Variant('s', 'Unknown')).value
-            self.known_devices[path] = {'mac': Variant('s', mac), 'name': Variant('s', name)}
+            self.known_devices[mac] = {
+                'name': name,
+                'mac': mac,
+                'path': path,
+            }
             print(f"Device found: {name} ({mac}) at {path}")
             for client in clients:
                 try:
@@ -115,54 +119,65 @@ class BluelandFrontend(ServiceInterface):
 
     @method()
     async def DiscoverDevices(self) -> 'as':
-        # Start discovery
-        await self.adapter.call_start_discovery()
-        print("Discovery started...")
-        # Wait for scan duration
-        await asyncio.sleep(10)
-        # Stop discovery
-        await self.adapter.call_stop_discovery()
-        print("Discovery stopped.")
-        # Return found devices
-        devices = []
-        for info in self.known_devices.values():
-            mac = info['mac'].value
-            name = info['name'].value
-            label = f"{name} ({mac})"
-            devices.append(label)
-        devices.append(f"Live devices feed is available via unix socket at {SOCKET_PATH}")
-        return devices
-    
-    @method()
-    async def KnownDevices(self) -> 'as':
-        # Rebuild from GetManagedObjects
+        devices = {}
+
+        # Step 1: Pull all known (paired) devices first
         introspect = await self.bus.introspect('org.bluez', '/')
         manager_obj = self.bus.get_proxy_object('org.bluez', '/', introspect)
-        manager = manager_obj.get_interface('org.freedesktop.DBus.ObjectManager')
-        objects = await manager.call_get_managed_objects()
-
-        devices = []
+        objmanager = manager_obj.get_interface('org.freedesktop.DBus.ObjectManager')
+        objects = await objmanager.call_get_managed_objects()
         for path, interfaces in objects.items():
             if 'org.bluez.Device1' in interfaces:
                 props = interfaces['org.bluez.Device1']
                 mac = props.get('Address', Variant('s', 'unknown')).value
                 name = props.get('Name', Variant('s', mac)).value
-                devices.append(f"{name} ({mac})")
-        return devices
+
+                if mac not in self.known_devices:
+                    self.known_devices[mac] = {
+                        'name': name,
+                        'mac': mac,
+                        'path': path,
+                    }
+
+                    # Push to frontend via socket
+                    for client in clients:
+                        try:
+                            client.write((json.dumps({
+                                "name": name,
+                                "mac": mac,
+                                "path": path
+                            }) + '\n').encode())
+                        except Exception as e:
+                            print(f"Failed to send to client: {e}")
+                devices[mac] = name
+
+        # Step 2: Begin live discovery
+        await self.adapter.call_start_discovery()
+        print("Discovery started...")
+        await asyncio.sleep(10)
+        await self.adapter.call_stop_discovery()
+        print("Discovery stopped.")
+
+        # Step 3: Merge live discovered devices
+        for mac, info in self.known_devices.items():
+            name = info["name"]
+            devices[mac] = name  # overwrites if duplicate MAC
+
+        # Format list for D-Bus return
+        result = [f"{name} ({mac})" for mac, name in devices.items()]
+        result.append(f"Live devices feed is available via unix socket at {SOCKET_PATH}")
+        return result
 
     @method()
     async def PairConnDevice(self, mac: 's') -> 's':
         if not self.known_devices:
-            raise Exception("No devices cached. Please run ListDevices first.")
-        # Locate device path
-        device_path = None
-        for path, info in self.known_devices.items():
-            if info['mac'].value.lower() == mac.lower():
-                device_path = path
-                break
+            raise Exception("No devices cached. Please run DiscoverDevices first.")
 
-        if not device_path:
+        info = self.known_devices.get(mac)  
+        if not info:
             raise Exception(f"Device with MAC {mac} not found")
+
+        device_path = info["path"]
 
         # Prepare interfaces
         device_introspection = await self.bus.introspect('org.bluez', device_path)
@@ -171,71 +186,63 @@ class BluelandFrontend(ServiceInterface):
         device_obj = self.bus.get_proxy_object('org.bluez', device_path, device_introspection)
         if 'org.bluez.Device1' not in available:
             print(f"{device_path} has no Device1 interface — skipping.")
-            return f"{self.known_devices[device_path]['name'].value} is not available right now."
+            return f"{info['name']} is not available right now."
         device = device_obj.get_interface('org.bluez.Device1')
         props_iface = device_obj.get_interface('org.freedesktop.DBus.Properties')
 
         # Check if paired
-        is_paired = (await props_iface.call_get('org.bluez.Device1', 'Paired')).value
+        is_paired = (await props_iface.call_get('org.bluez.Device1', 'Paired'))
         try:
             if not is_paired:
                 await device.call_pair()
                 await props_iface.call_set('org.bluez.Device1', 'Trusted', Variant('b', True))
-                print(f"Paired and trusted {self.known_devices[device_path]['name'].value}")
+                print(f"Paired and trusted {info['name']}")
             else:
-                print(f"{self.known_devices[device_path]['name'].value} already paired — skipping")
+                print(f"{info['name']} already paired — skipping")
 
-            # Check if connected
-            is_connected = (await props_iface.call_get('org.bluez.Device1', 'Connected')).value
-            if is_connected:
-                print(f"{self.known_devices[device_path]['name'].value} already connected — skipping connect.")
-                return f"{self.known_devices[device_path]['name'].value} already connected."
-            else:
-                await device.call_connect()
-            return f"Connected to {self.known_devices[device_path]['name'].value}"
+            await device.call_connect()
+            return f"Connected to {info['name']}"
         except Exception as e:
-            raise Exception(f"Failed to connect to {self.known_devices[device_path]['name'].value}: {e}")
+            raise Exception(f"Failed to connect to {info['name']}: {e}")
 
     @method()
     async def DisconnectDevice(self, mac: 's') -> 's':
-        # Find device path from known_devices
-        device_path = next(
-            (path for path, info in self.known_devices.items()
-            if info['mac'].value.lower() == mac.lower()),
-            None
-        )
-        if not device_path:
+        if not self.known_devices:
+            raise Exception("No devices cached. Please run DiscoverDevices first.")
+
+        info = self.known_devices.get(mac)
+        if not info:
             return f"Device {mac} not found"
 
+        device_path = info["path"]
         device_obj = self.bus.get_proxy_object('org.bluez', device_path, await self.bus.introspect('org.bluez', device_path))
         device = device_obj.get_interface('org.bluez.Device1')
 
         try:
             await device.call_disconnect()
-            return f"Device {self.known_devices[device_path]['name'].value} disconnected."
+            return f"Device {info['name']} disconnected."
         except Exception as e:
-            return f"Failed to disconnect {self.known_devices[device_path]['name'].value}: {e}"
+            return f"Failed to disconnect {info['name']}: {e}"
 
     @method()
     async def RemoveDevice(self, mac: 's') -> 's':
-        # Find device path
-        device_path = next(
-            (path for path, info in self.known_devices.items()
-            if info['mac'].value.lower() == mac.lower()),
-            None
-        )
-        if not device_path:
+        if not self.known_devices:
+            raise Exception("No devices cached. Please run DiscoverDevices first.")
+
+        info = self.known_devices.get(mac)
+        if not info:
             return f"Device {mac} not found"
 
-        adapter_path = '/org/bluez/hci0'  # Change this if you have multiple adapters
+        device_path = info["path"]
+        adapter_path = '/org/bluez/hci0'
         adapter_obj = self.bus.get_proxy_object('org.bluez', adapter_path, await self.bus.introspect('org.bluez', adapter_path))
         adapter = adapter_obj.get_interface('org.bluez.Adapter1')
 
         try:
             await adapter.call_remove_device(device_path)
-            return f"Device {self.known_devices[device_path]['name'].value} removed from known devices."
+            return f"Device {info['name']} removed from known devices."
         except Exception as e:
-            return f"Failed to remove {self.known_devices[device_path]['name'].value}: {e}"
+            return f"Failed to remove {info['name']}: {e}"
 
 
 async def main():
