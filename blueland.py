@@ -16,6 +16,7 @@ import asyncio
 import subprocess
 
 AGENT_PATH = '/org/bluez/Blueland/Agent'
+OBEX_AGENT_PATH = '/org/bluez/Blueland/ObexAgent'
 SOCKET_PATH = f'/run/user/{os.getuid()}/blueland/blueland.sock'
 
 UUID_NAMES = {
@@ -83,10 +84,11 @@ class BluetoothAgent(ServiceInterface):
     
 class BluelandFrontend(ServiceInterface):
     # Frontend for the agent, to be used by other applications
-    def __init__(self, adapter, bus):
+    def __init__(self, adapter, bus, fbus):
         super().__init__('org.blueland.Frontend')
         self.adapter = adapter
         self.bus = bus
+        self.fbus = fbus
         self.known_devices = {}
 
     async def setup(self):
@@ -243,6 +245,67 @@ class BluelandFrontend(ServiceInterface):
             return f"Device {info['name']} removed from known devices."
         except Exception as e:
             return f"Failed to remove {info['name']}: {e}"
+        
+    @method()
+    async def SendFiles(self, mac: 's', filepath: 's') -> 's':
+        if not self.known_devices:
+            raise Exception("No devices cached. Please run DiscoverDevices first.")
+
+        info = self.known_devices.get(mac)
+        if not info:
+            return f"Device {mac} not found"
+
+        # Step 1: Create OBEX session
+        obex_path = '/org/bluez/obex'
+        obex_obj = self.fbus.get_proxy_object('org.bluez.obex', obex_path, await self.fbus.introspect('org.bluez.obex', obex_path))
+        client = obex_obj.get_interface('org.bluez.obex.Client1')
+
+        try:
+            session_path = await client.call_create_session(mac, {'Target': Variant('s', 'opp')})
+        except Exception as e:
+            return f"Failed to create OBEX session with {mac}: {e}"
+
+        # Step 2: Get ObjectPush1 interface
+        session_obj = self.fbus.get_proxy_object('org.bluez.obex', session_path, await self.fbus.introspect('org.bluez.obex', session_path))
+        push_iface = session_obj.get_interface('org.bluez.obex.ObjectPush1')
+
+        # Step 3: Send file
+        try:
+            await push_iface.call_send_file(filepath)
+            return f"File {os.path.basename(filepath)} sent to {info['name']} ({mac})."
+        except Exception as e:
+            return f"Failed to send file to {info['name']}: {e}"
+
+
+class BluelandObexAgent(ServiceInterface):
+    def __init__(self, bus):
+        super().__init__('org.bluez.obex.Agent1')
+        self.bus = bus
+        self.download_dir = os.path.expanduser("~/")
+        self.auto_accept = False
+
+    @method()
+    async def AuthorizePush(self, transfer: 'o') -> 's':
+        # Connect to the transfer object and inspect its properties
+        transfer_obj = self.bus.get_proxy_object('org.bluez.obex', transfer, await self.bus.introspect('org.bluez.obex', transfer))
+        props = transfer_obj.get_interface('org.freedesktop.DBus.Properties')
+        name = await props.call_get('org.bluez.obex.Transfer1', 'Name')
+        size = await props.call_get('org.bluez.obex.Transfer1', 'Size')
+
+        print(f"Incoming file: {name.value} ({size.value} bytes) from {transfer}")
+
+        if self.auto_accept:
+            return os.path.join(self.download_dir, name.value)
+        else:
+            response = zenity_prompt(f"Accept file {name.value} ({size.value} bytes)?")
+            if response.lower() == 'yes':
+                return os.path.join(self.download_dir, name.value)
+            else:
+                raise Exception("Rejected by policy")
+
+    @method()
+    def Cancel(self, device: 'o'):
+        print(f"Transfer from {device} cancelled.")
 
 
 async def main():
@@ -250,17 +313,17 @@ async def main():
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
 
     # We're asking BlueZ what it wants us to do
-    bluez_obj = await bus.introspect('org.bluez', '/org/bluez')
+    bluez_introspection = await bus.introspect('org.bluez', '/org/bluez')
     # We get the AgentManager interface and claim it
-    manager = bus.get_proxy_object('org.bluez', '/org/bluez', bluez_obj).get_interface('org.bluez.AgentManager1')
+    manager = bus.get_proxy_object('org.bluez', '/org/bluez', bluez_introspection).get_interface('org.bluez.AgentManager1')
     await manager.call_register_agent(AGENT_PATH, 'DisplayYesNo')
     await manager.call_request_default_agent(AGENT_PATH)
     print("Agent registered and listening.")
 
     # We're claiming the adapter now, so we can interact with it
     # This is the main Bluetooth adapter, usually hci0
-    introspection = await bus.introspect('org.bluez', '/org/bluez/hci0')
-    adapter_obj = bus.get_proxy_object('org.bluez', '/org/bluez/hci0', introspection)
+    adapter_introspection = await bus.introspect('org.bluez', '/org/bluez/hci0')
+    adapter_obj = bus.get_proxy_object('org.bluez', '/org/bluez/hci0', adapter_introspection)
     adapter = adapter_obj.get_interface('org.bluez.Adapter1')
 
     # Now we insert it all together
@@ -269,11 +332,20 @@ async def main():
 
     # Also, frontend for you nerds
     fbus = await MessageBus(bus_type=BusType.SESSION).connect()
-    frontend = BluelandFrontend(adapter, bus)
+    frontend = BluelandFrontend(adapter, bus, fbus)
     await fbus.request_name('org.blueland.Frontend')
     fbus.export('/org/blueland/Frontend', frontend)
     frontend.agent = agent  # Link the frontend to the agent
     await frontend.setup()  # Setup the frontend to listen for device events
+
+    # Obex agent for file transfers
+    obex_agent = BluelandObexAgent(fbus)
+    fbus.export(OBEX_AGENT_PATH, obex_agent)
+
+    # Tell BlueZ's obex manager that this is the default agent
+    obex_introspection = await fbus.introspect('org.bluez.obex', '/org/bluez/obex')
+    obex_manager = fbus.get_proxy_object('org.bluez.obex', '/org/bluez/obex', obex_introspection).get_interface('org.bluez.obex.AgentManager1')
+    await obex_manager.call_register_agent(OBEX_AGENT_PATH)
 
     # Unix socket setup
     # Remove existing socket if it exists
