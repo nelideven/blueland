@@ -54,7 +54,7 @@ class BluetoothAgent(ServiceInterface):
         super().__init__('org.bluez.Agent1')
 
     @method()
-    def RequestConfirmation(self, device: 'o', passkey: 'u'):
+    def RequestConfirmation(self, device: 'o', passkey: 'u'): # type: ignore
         response = zenity_prompt(f"Confirm pairing with passkey: {passkey}")
         if response.lower() != 'yes':
             raise Exception("User rejected pairing")
@@ -65,17 +65,17 @@ class BluetoothAgent(ServiceInterface):
         print("Pairing canceled.")
 
     @method()
-    def RequestPinCode(self, device: 'o') -> 's':
+    def RequestPinCode(self, device: 'o') -> 's': # type: ignore
         pin = zenity_prompt("Enter PIN", options='')
         return pin
 
     @method()
-    def RequestPasskey(self, device: 'o') -> 'u':
+    def RequestPasskey(self, device: 'o') -> 'u': # type: ignore
         passkey = zenity_prompt("Enter Passkey", options='')
         return int(passkey)
     
     @method()
-    def AuthorizeService(self, device: 'o', uuid: 's'):
+    def AuthorizeService(self, device: 'o', uuid: 's'): # type: ignore
         name = UUID_NAMES.get(uuid.lower(), f"Unknown Service ({uuid})")
         response = zenity_prompt(f"Allow device to use:\n{name}")
         if response.lower() != 'yes':
@@ -120,7 +120,7 @@ class BluelandFrontend(ServiceInterface):
                     print(f"Failed to send to client: {e}")
 
     @method()
-    async def DiscoverDevices(self) -> 'as':
+    async def DiscoverDevices(self) -> 'as': # type: ignore
         devices = {}
 
         # Step 1: Pull all known (paired) devices first
@@ -133,25 +133,22 @@ class BluelandFrontend(ServiceInterface):
                 props = interfaces['org.bluez.Device1']
                 mac = props.get('Address', Variant('s', 'unknown')).value
                 name = props.get('Name', Variant('s', mac)).value
+                self.known_devices[mac] = {
+                    'name': name,
+                    'mac': mac,
+                    'path': path,
+                }
 
-                if mac not in self.known_devices:
-                    self.known_devices[mac] = {
-                        'name': name,
-                        'mac': mac,
-                        'path': path,
-                    }
-
-                    # Push to frontend via socket
-                    for client in clients:
-                        try:
-                            client.write((json.dumps({
-                                "name": name,
-                                "mac": mac,
-                                "path": path
-                            }) + '\n').encode())
-                        except Exception as e:
-                            print(f"Failed to send to client: {e}")
-                devices[mac] = name
+                # Push to frontend via socket
+                for client in clients:
+                    try:
+                        client.write((json.dumps({
+                            "name": name,
+                            "mac": mac,
+                            "path": path
+                        }) + '\n').encode())
+                    except Exception as e:
+                        print(f"Failed to send to client: {e}")
 
         # Step 2: Begin live discovery
         await self.adapter.call_start_discovery()
@@ -171,7 +168,7 @@ class BluelandFrontend(ServiceInterface):
         return result
 
     @method()
-    async def PairConnDevice(self, mac: 's') -> 's':
+    async def PairConnDevice(self, mac: 's') -> 's': # type: ignore
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first.")
 
@@ -208,7 +205,7 @@ class BluelandFrontend(ServiceInterface):
             raise Exception(f"Failed to connect to {info['name']}: {e}")
 
     @method()
-    async def DisconnectDevice(self, mac: 's') -> 's':
+    async def DisconnectDevice(self, mac: 's') -> 's': # type: ignore
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first.")
 
@@ -227,7 +224,7 @@ class BluelandFrontend(ServiceInterface):
             return f"Failed to disconnect {info['name']}: {e}"
 
     @method()
-    async def RemoveDevice(self, mac: 's') -> 's':
+    async def RemoveDevice(self, mac: 's') -> 's': # type: ignore
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first.")
 
@@ -247,7 +244,7 @@ class BluelandFrontend(ServiceInterface):
             return f"Failed to remove {info['name']}: {e}"
         
     @method()
-    async def SendFiles(self, mac: 's', filepath: 's') -> 's':
+    async def SendFiles(self, mac: 's', filepath: 's') -> 's': # type: ignore
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first.")
 
@@ -285,7 +282,7 @@ class BluelandObexAgent(ServiceInterface):
         self.auto_accept = False
 
     @method()
-    async def AuthorizePush(self, transfer: 'o') -> 's':
+    async def AuthorizePush(self, transfer: 'o') -> 's': # type: ignore
         # Connect to the transfer object and inspect its properties
         transfer_obj = self.bus.get_proxy_object('org.bluez.obex', transfer, await self.bus.introspect('org.bluez.obex', transfer))
         props = transfer_obj.get_interface('org.freedesktop.DBus.Properties')
@@ -304,7 +301,7 @@ class BluelandObexAgent(ServiceInterface):
                 raise Exception("Rejected by policy")
 
     @method()
-    def Cancel(self, device: 'o'):
+    def Cancel(self, device: 'o'): # type: ignore
         print(f"Transfer from {device} cancelled.")
 
 
