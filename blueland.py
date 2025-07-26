@@ -168,6 +168,28 @@ class BluelandFrontend(ServiceInterface):
         return result
 
     @method()
+    async def DeviceState(self, mac: 's') -> 'a{sv}': # type: ignore
+        info = self.known_devices.get(mac)
+        if not info:
+            return {}
+
+        path = info["path"]
+        device_obj = self.bus.get_proxy_object('org.bluez', path, await self.bus.introspect('org.bluez', path))
+        props_iface = device_obj.get_interface('org.freedesktop.DBus.Properties')
+        
+        keys = ['Name', 'Address', 'Paired', 'Connected', 'Trusted', 'RSSI', 'UUIDs']
+        state = {}
+
+        for key in keys:
+            try:
+                val = await props_iface.call_get('org.bluez.Device1', key)
+                state[key] = val
+            except Exception:
+                pass  # Silent skip if unsupported
+
+        return state
+
+    @method()
     async def PairConnDevice(self, mac: 's') -> 's': # type: ignore
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first.")
