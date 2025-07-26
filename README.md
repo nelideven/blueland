@@ -6,6 +6,7 @@ Blueland is a modular Python backend that manages Bluetooth device connections, 
 
 ## Features
 - Pair, connect, and trust devices with a single D-Bus call (org.blueland.Frontend.PairConnDevice, with device MAC address)
+- Check device status (org.blueland.Frontend.DeviceState, with device MAC address)
 - PIN/Passkey UI via Zenity (no need to touch the terminal)
 - Live device stream via Unix socket (/run/user/(userid)/blueland/blueland.sock) for frontend integration
 - Modular backend API for CLI wrappers or graphical frontends
@@ -51,6 +52,13 @@ gdbus call --session \
   -d org.blueland.Frontend \
   -o /org/blueland/Frontend \
   -m org.blueland.Frontend.PairConnDevice \
+  <device mac addr>
+
+# Check device status
+gdbus call --session \
+  -d org.blueland.Frontend \
+  -o /org/blueland/Frontend \
+  -m org.blueland.Frontend.DeviceState \
   <device mac addr>
 
 # Disconnect a device
