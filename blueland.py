@@ -362,7 +362,16 @@ async def main():
     fbus.export(OBEX_AGENT_PATH, obex_agent)
 
     # Tell BlueZ's obex manager that this is the default agent
-    obex_introspection = await fbus.introspect('org.bluez.obex', '/org/bluez/obex')
+    try:
+        obex_introspection = await fbus.introspect('org.bluez.obex', '/org/bluez/obex')
+    except TimeoutError:
+        print("Reattempting obex introspection...")
+        while True:
+            try:
+                obex_introspection = await fbus.introspect('org.bluez.obex', '/org/bluez/obex')
+                break  # Break the loop if introspection is successful
+            except TimeoutError:
+                print("Reattempting obex introspection...")
     obex_manager = fbus.get_proxy_object('org.bluez.obex', '/org/bluez/obex', obex_introspection).get_interface('org.bluez.obex.AgentManager1')
     await obex_manager.call_register_agent(OBEX_AGENT_PATH)
 
