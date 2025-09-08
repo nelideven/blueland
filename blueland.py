@@ -133,6 +133,9 @@ class BluelandFrontend(ServiceInterface):
                 props = interfaces['org.bluez.Device1']
                 mac = props.get('Address', Variant('s', 'unknown')).value
                 name = props.get('Name', Variant('s', mac)).value
+                paired = props.get('Paired', Variant('b', False)).value
+                if not paired:
+                    continue
                 self.known_devices[mac] = {
                     'name': name,
                     'mac': mac,
