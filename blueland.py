@@ -174,10 +174,16 @@ class BluelandFrontend(ServiceInterface):
     async def DeviceState(self, mac: 's') -> 'a{sv}': # type: ignore
         info = self.known_devices.get(mac)
         if not info:
-            return {}
+            raise Exception("No devices cached. Please run DiscoverDevices first.")
 
-        path = info["path"]
-        device_obj = self.bus.get_proxy_object('org.bluez', path, await self.bus.introspect('org.bluez', path))
+        device_path = info["path"]
+        device_introspection = await self.bus.introspect('org.bluez', device_path)
+        available = [iface.name for iface in device_introspection.interfaces]
+        print(f"Available interfaces on {device_path}: {available}")
+        device_obj = self.bus.get_proxy_object('org.bluez', device_path, await self.bus.introspect('org.bluez', device_path))
+        if 'org.bluez.Device1' not in available:
+            print(f"{device_path} has no Device1 interface — skipping.")
+            return f"{info['name']} is not available right now."
         props_iface = device_obj.get_interface('org.freedesktop.DBus.Properties')
         
         keys = ['Name', 'Address', 'Paired', 'Connected', 'Trusted', 'RSSI', 'UUIDs']
@@ -239,7 +245,13 @@ class BluelandFrontend(ServiceInterface):
             return f"Device {mac} not found"
 
         device_path = info["path"]
-        device_obj = self.bus.get_proxy_object('org.bluez', device_path, await self.bus.introspect('org.bluez', device_path))
+        device_introspection = await self.bus.introspect('org.bluez', device_path)
+        available = [iface.name for iface in device_introspection.interfaces]
+        print(f"Available interfaces on {device_path}: {available}")
+        device_obj = self.bus.get_proxy_object('org.bluez', device_path, device_introspection)
+        if 'org.bluez.Device1' not in available:
+            print(f"{device_path} has no Device1 interface — skipping.")
+            return f"{info['name']} is not available right now."
         device = device_obj.get_interface('org.bluez.Device1')
 
         try:
