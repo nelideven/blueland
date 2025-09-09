@@ -172,9 +172,12 @@ class BluelandFrontend(ServiceInterface):
 
     @method()
     async def DeviceState(self, mac: 's') -> 'a{sv}': # type: ignore
+        if not self.known_devices:
+            raise Exception("No devices cached. Please run DiscoverDevices first..")
+
         info = self.known_devices.get(mac)
         if not info:
-            raise Exception("No devices cached. Please run DiscoverDevices first.")
+            raise Exception(f"Device with MAC {mac} not found")
 
         device_path = info["path"]
         device_introspection = await self.bus.introspect('org.bluez', device_path)
