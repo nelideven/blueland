@@ -186,7 +186,7 @@ class BluelandFrontend(ServiceInterface):
         device_obj = self.bus.get_proxy_object('org.bluez', device_path, device_introspection)
         if 'org.bluez.Device1' not in available:
             print(f"{device_path} has no Device1 interface — skipping.")
-            return {"error": f"{info['name']} is not available right now."}
+            return {"error": Variant('s', f"{info['name']} is not available right now.")}
         props_iface = device_obj.get_interface('org.freedesktop.DBus.Properties')
         
         keys = ['Name', 'Address', 'Paired', 'Connected', 'Trusted', 'RSSI', 'UUIDs']
