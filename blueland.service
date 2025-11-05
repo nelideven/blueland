@@ -1,0 +1,9 @@
+[Unit]
+Description=Blueland
+
+[Service]
+ExecStart=python3 /usr/bin/blueland
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

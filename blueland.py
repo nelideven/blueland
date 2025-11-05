@@ -19,21 +19,36 @@ AGENT_PATH = '/org/bluez/Blueland/Agent'
 OBEX_AGENT_PATH = '/org/bluez/Blueland/ObexAgent'
 SOCKET_PATH = f'/run/user/{os.getuid()}/blueland/blueland.sock'
 
-UUID_NAMES = {
-    "0000111e-0000-1000-8000-00805f9b34fb": "Hands-Free Profile (Calls)",
-    "0000110d-0000-1000-8000-00805f9b34fb": "A2DP Sink (Media Audio)",
-    "0000110e-0000-1000-8000-00805f9b34fb": "AVRCP Controller (Media Controls)",
+SENSITIVE_UUIDS = {
+    "00001105-0000-1000-8000-00805f9b34fb",
+    "00001106-0000-1000-8000-00805f9b34fb",
+    "0000111f-0000-1000-8000-00805f9b34fb",
+    "0000112f-0000-1000-8000-00805f9b34fb",
+}
+
+SENSITIVE_UUID_NAMES = {
+    "0000111f-0000-1000-8000-00805f9b34fb": "Phonebook (Contacts) Access",
+    "0000112f-0000-1000-8000-00805f9b34fb": "Message Access",
+    "00001105-0000-1000-8000-00805f9b34fb": "OBEX Object Push",
+    "00001106-0000-1000-8000-00805f9b34fb": "OBEX File Transfer",
 }
 
 clients = set()  # Track connected clients
 
-def zenity_prompt(prompt_text):
+def zenity_prompt(prompt_text, yesno=True):
     try:
-        result = subprocess.run(
-            ['zenity', '--question', '--text', prompt_text],
-            capture_output=True
-        )
-        return 'yes' if result.returncode == 0 else 'no'
+        if yesno:
+            result = subprocess.run(
+                ['zenity', '--question', '--text', prompt_text],
+                capture_output=True
+            )
+            return 'yes' if result.returncode == 0 else 'no'
+        else:
+            result = subprocess.run(
+                ['zenity', '--entry', '--text', prompt_text],
+                capture_output=True
+            )
+            return result.stdout.decode().strip()
     except Exception as e:
         print("Zenity failed:", e)
         return 'no'
@@ -55,7 +70,7 @@ class BluetoothAgent(ServiceInterface):
 
     @method()
     def RequestConfirmation(self, device: 'o', passkey: 'u'): # type: ignore
-        response = zenity_prompt(f"Confirm pairing with passkey: {passkey}")
+        response = zenity_prompt(f"Confirm pairing with passkey: {passkey}", True)
         if response.lower() != 'yes':
             raise Exception("User rejected pairing")
         return None
@@ -66,26 +81,29 @@ class BluetoothAgent(ServiceInterface):
 
     @method()
     def RequestPinCode(self, device: 'o') -> 's': # type: ignore
-        pin = zenity_prompt("Enter PIN", options='')
+        pin = zenity_prompt("Enter PIN", False)
         return pin
 
     @method()
     def RequestPasskey(self, device: 'o') -> 'u': # type: ignore
-        passkey = zenity_prompt("Enter Passkey", options='')
+        passkey = zenity_prompt("Enter Passkey", False)
         return int(passkey)
     
     @method()
     def AuthorizeService(self, device: 'o', uuid: 's'): # type: ignore
-        name = UUID_NAMES.get(uuid.lower(), f"Unknown Service ({uuid})")
-        response = zenity_prompt(f"Allow device to use:\n{name}")
+        if uuid.lower() not in SENSITIVE_UUIDS:
+            return None  # auto-allow
+
+        name = SENSITIVE_UUID_NAMES.get(uuid.lower(), f"Unknown Service ({uuid})")
+        response = zenity_prompt(f"Allow device to use:\n{name}?", True)
         if response.lower() != 'yes':
             raise Exception("Service authorization denied")
         return None
     
 class BluelandFrontend(ServiceInterface):
-    # Frontend for the agent, to be used by other applications
+    # Frontend-side for the agent, to be used by other applications
     def __init__(self, adapter, bus, fbus):
-        super().__init__('org.blueland.Frontend')
+        super().__init__('org.blueland.Agent')
         self.adapter = adapter
         self.bus = bus
         self.fbus = fbus
@@ -273,12 +291,9 @@ class BluelandFrontend(ServiceInterface):
             return f"Device {mac} not found"
 
         device_path = info["path"]
-        adapter_path = '/org/bluez/hci0'
-        adapter_obj = self.bus.get_proxy_object('org.bluez', adapter_path, await self.bus.introspect('org.bluez', adapter_path))
-        adapter = adapter_obj.get_interface('org.bluez.Adapter1')
 
         try:
-            await adapter.call_remove_device(device_path)
+            await self.adapter.call_remove_device(device_path)
             return f"Device {info['name']} removed from known devices."
         except Exception as e:
             return f"Failed to remove {info['name']}: {e}"
@@ -349,18 +364,37 @@ async def main():
     # It might get confusing but I'll explain it, I guess
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
 
-    # We're asking BlueZ what it wants us to do
+    # We're caching BlueZ's introspection to get the AgentManager interface
     bluez_introspection = await bus.introspect('org.bluez', '/org/bluez')
     # We get the AgentManager interface and claim it
     manager = bus.get_proxy_object('org.bluez', '/org/bluez', bluez_introspection).get_interface('org.bluez.AgentManager1')
-    await manager.call_register_agent(AGENT_PATH, 'DisplayYesNo')
+    await manager.call_register_agent(AGENT_PATH, 'KeyboardDisplay')  # Registering our agent
     await manager.call_request_default_agent(AGENT_PATH)
     print("Agent registered and listening.")
 
     # We're claiming the adapter now, so we can interact with it
-    # This is the main Bluetooth adapter, usually hci0
-    adapter_introspection = await bus.introspect('org.bluez', '/org/bluez/hci0')
-    adapter_obj = bus.get_proxy_object('org.bluez', '/org/bluez/hci0', adapter_introspection)
+    # This is some detection code for multiple adapters or single adapters, or none at all (exit)
+    adapter_path_check = subprocess.check_output("hciconfig", text=True)
+    adapter_paths = [
+        line.split()[0].rstrip(':').lower()
+        for line in adapter_path_check.splitlines()
+        if line.startswith("hci")
+    ]
+    if len(adapter_paths) > 1:
+        adapter_path = zenity_prompt(f"Multiple Bluetooth adapters detected\n\n{'\n'.join(f"• {a}" for a in adapter_paths)}\n\nWhich one to use?", True).strip().lower()
+        if adapter_path not in adapter_paths:
+            subprocess.Popen(["zenity", "--error", "--text=Invalid adapter selected. Exiting."])
+            await asyncio.sleep(1)
+            exit(1)
+    elif len(adapter_paths) == 1:
+        adapter_path = adapter_paths[0]
+    else:
+        subprocess.Popen(["zenity", "--error", "--text=No Bluetooth adapters found. Exiting."])
+        await asyncio.sleep(1)
+        exit(1)
+    print("Using adapter " + adapter_path)
+    adapter_introspection = await bus.introspect('org.bluez', f'/org/bluez/{adapter_path}')
+    adapter_obj = bus.get_proxy_object('org.bluez', f'/org/bluez/{adapter_path}', adapter_introspection)
     adapter = adapter_obj.get_interface('org.bluez.Adapter1')
 
     # Now we insert it all together
@@ -370,8 +404,8 @@ async def main():
     # Also, frontend for you nerds
     fbus = await MessageBus(bus_type=BusType.SESSION).connect()
     frontend = BluelandFrontend(adapter, bus, fbus)
-    await fbus.request_name('org.blueland.Frontend')
-    fbus.export('/org/blueland/Frontend', frontend)
+    await fbus.request_name('org.blueland.Agent')
+    fbus.export('/org/blueland/Agent', frontend)
     frontend.agent = agent  # Link the frontend to the agent
     await frontend.setup()  # Setup the frontend to listen for device events
 

@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.blueland.Agent
+Exec=python3 /usr/bin/blueland
+SystemdService=blueland.service
