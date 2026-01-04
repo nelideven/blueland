@@ -1,0 +1,6 @@
+Package: blueland
+Version: 1.1
+Architecture: all
+Depends: python3
+Maintainer: Nyoman nnyomandhipa@outlook.com
+Description: A reactive Bluetooth Agent focusing on Hyprland users.
