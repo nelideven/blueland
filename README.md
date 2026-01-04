@@ -13,7 +13,7 @@ Blueland is a modular Python backend that manages Bluetooth device connections, 
 - File sharing (might not work)
 
 ## What it cannot do
-- A full-fledged UI like [blueman](https://github.com/blueman-project/blueman) or [overskride](https://github.com/kaii-lb/overskride) (you might want to check out [blueland-frontend](https://github.com/nelideven/blueland-frontend) instead)
+- A full-fledged UI like [blueman](https://github.com/blueman-project/blueman) or [overskride](https://github.com/kaii-lb/overskride) (you might want to check out [blueland-ui](https://github.com/nelideven/blueland-ui) instead)
 - Automatically handle low-level audio routing (e.g. Default sink/source switching)
 - Persist device state across reboots (i.e. cache is session-based)
 - Replace BlueZ. It is a BlueZ agent, not a reimplementation of BlueZ
