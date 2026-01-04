@@ -137,8 +137,7 @@ class BluelandFrontend(ServiceInterface):
                 except Exception as e:
                     print(f"Failed to send to client: {e}")
 
-    @method()
-    async def DiscoverDevices(self) -> 'as': # type: ignore
+    async def internal_discoverdevices(self):
         devices = {}
 
         # Step 1: Pull all known (paired) devices first
@@ -189,6 +188,10 @@ class BluelandFrontend(ServiceInterface):
         return result
 
     @method()
+    async def DiscoverDevices(self) -> 'as': # type: ignore
+        return await self.internal_discoverdevices()
+
+    @method()
     async def DeviceState(self, mac: 's') -> 'a{sv}': # type: ignore
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first..")
@@ -206,18 +209,12 @@ class BluelandFrontend(ServiceInterface):
             print(f"{device_path} has no Device1 interface — skipping.")
             return {"error": Variant('s', f"{info['name']} is not available right now.")}
         props_iface = device_obj.get_interface('org.freedesktop.DBus.Properties')
-        
-        keys = ['Name', 'Address', 'Paired', 'Connected', 'Trusted', 'RSSI', 'UUIDs']
-        state = {}
+        try:
+            all_props = await props_iface.call_get_all('org.bluez.Device1')
+        except Exception:
+            pass  # Silent skip if unsupported
 
-        for key in keys:
-            try:
-                val = await props_iface.call_get('org.bluez.Device1', key)
-                state[key] = val
-            except Exception:
-                pass  # Silent skip if unsupported
-
-        return state
+        return all_props
 
     @method()
     async def PairConnDevice(self, mac: 's') -> 's': # type: ignore
@@ -401,13 +398,14 @@ async def main():
     agent = BluetoothAgent() # Defining in the bus where our functions are
     bus.export(AGENT_PATH, agent) # Just inserting the class, objects, blablabla to the bus
 
-    # Also, frontend for you nerds
+    # Also, the dbus 'frontend' for you nerds (/j)
     fbus = await MessageBus(bus_type=BusType.SESSION).connect()
     frontend = BluelandFrontend(adapter, bus, fbus)
     await fbus.request_name('org.blueland.Agent')
     fbus.export('/org/blueland/Agent', frontend)
     frontend.agent = agent  # Link the frontend to the agent
     await frontend.setup()  # Setup the frontend to listen for device events
+    asyncio.create_task(frontend.internal_discoverdevices())  # Autostart DiscoverDevices() for convenience lol
 
     # Obex agent for file transfers
     obex_agent = BluelandObexAgent(fbus)

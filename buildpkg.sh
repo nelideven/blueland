@@ -7,14 +7,14 @@
 #You should have received a copy of the GNU Lesser General Public License along with this library; if not, see <https://www.gnu.org/licenses/>.
 
 
-# Removing old buildpkg folder just in case
-sudo rm -rf /tmp/blueland-pkg/
-
 # Requesting for sudo
 if [ "$EUID" -ne 0 ]; then
   echo "Requesting sudo access to build package..."
   sudo -v
 fi
+
+# Removing old buildpkg folder just in case
+sudo rm -rf /tmp/blueland-pkg/
 
 # Build structure
 mkdir -p /tmp/blueland-pkg/usr/bin/
