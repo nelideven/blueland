@@ -1,0 +1,11 @@
+USER_HOME=$(eval echo "~$SUDO_USER")
+tee $USER_HOME/postinstall.sh > /dev/null << 'EOF'
+#!/bin/bash
+systemctl --user daemon-reexec
+systemctl --user enable blueland.service
+systemctl --user start blueland.service
+rm -rf $HOME/postinstall.sh
+EOF
+chown "$SUDO_USER":"$SUDO_USER" "$USER_HOME/postinstall.sh"
+chmod 755 "$USER_HOME/postinstall.sh"
+echo "Install complete! To autostart blueland, run the postinstall.sh in your home directory."
