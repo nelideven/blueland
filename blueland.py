@@ -10,10 +10,7 @@ You should have received a copy of the GNU Lesser General Public License along w
 from dbus_next.service import ServiceInterface, method
 from dbus_next.aio import MessageBus
 from dbus_next import Variant, BusType
-import os
-import json
-import asyncio
-import subprocess
+import os, json, asyncio, subprocess, signal
 
 AGENT_PATH = '/org/bluez/Blueland/Agent'
 OBEX_AGENT_PATH = '/org/bluez/Blueland/ObexAgent'
@@ -297,6 +294,17 @@ class BluelandFrontend(ServiceInterface):
         
     @method()
     async def SendFiles(self, mac: 's', filepath: 's') -> 's': # type: ignore
+        if not self.obex_ready and not self.obex_manager:
+            # Wait until obexd owns the name
+            obex_introspection = await self.fbus.introspect('org.bluez.obex', '/org/bluez/obex')
+            self.obex_manager = self.fbus.get_proxy_object(
+                'org.bluez.obex', '/org/bluez/obex', obex_introspection
+            ).get_interface('org.bluez.obex.AgentManager1')
+
+            await self.obex_manager.call_register_agent(OBEX_AGENT_PATH)
+            self.obex_ready = True
+            print("OBEX agent registered (lazy init).")
+
         if not self.known_devices:
             raise Exception("No devices cached. Please run DiscoverDevices first.")
 
@@ -407,24 +415,6 @@ async def main():
     await frontend.setup()  # Setup the frontend to listen for device events
     asyncio.create_task(frontend.internal_discoverdevices())  # Autostart DiscoverDevices() for convenience lol
 
-    # Obex agent for file transfers
-    obex_agent = BluelandObexAgent(fbus)
-    fbus.export(OBEX_AGENT_PATH, obex_agent)
-
-    # Tell BlueZ's obex manager that this is the default agent
-    try:
-        obex_introspection = await fbus.introspect('org.bluez.obex', '/org/bluez/obex')
-    except TimeoutError:
-        print("Reattempting obex introspection...")
-        while True:
-            try:
-                obex_introspection = await fbus.introspect('org.bluez.obex', '/org/bluez/obex')
-                break  # Break the loop if introspection is successful
-            except TimeoutError:
-                print("Reattempting obex introspection...")
-    obex_manager = fbus.get_proxy_object('org.bluez.obex', '/org/bluez/obex', obex_introspection).get_interface('org.bluez.obex.AgentManager1')
-    await obex_manager.call_register_agent(OBEX_AGENT_PATH)
-
     # Unix socket setup
     # Remove existing socket if it exists
     if os.path.exists(SOCKET_PATH):
@@ -448,6 +438,7 @@ if os.name == 'nt':
     exit(0)
 else:
     try:
+        signal.signal(signal.SIGTERM, lambda signum, frame: (print("Received termination signal. Exiting."), exit(0)))
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nAgent stopped by user. Bye!")
